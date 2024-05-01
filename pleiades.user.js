@@ -503,23 +503,22 @@ function selectBestShift(hour, day, coverage, optimal = false) {
 
 
 
-// Updates the coverage needs based on a shift being assigned, modifying the number of staff needed for each hour the shift covers.
-function updateCoverageNeeds(shift, day, coverage, employee, isOptimal = false) {
+
+function assignShiftToEmployee(shift, day, coverage, employee) {
     let shiftHours = getShiftHours(shift);
+    console.log(`Assigning shift ${shift.id} for ${employee.nom} on ${day}: covers ${shiftHours.join(', ')}`);
     shiftHours.forEach(hour => {
         if (coverage[day] && coverage[day][hour]) {
-            let currentCoverage = coverage[day][hour];
-            let neededCoverage = isOptimal ? currentCoverage.optimal : currentCoverage.minimum;
-            if (currentCoverage.assigned < neededCoverage) {
-                currentCoverage.assigned += 1;
-                if (!currentCoverage.employees.includes(employee.nom)) {
-                    currentCoverage.employees.push(employee.nom);
-                }
+            if (!coverage[day][hour].employees.includes(employee.nom)) {
+                coverage[day][hour].assigned += 1;
+                coverage[day][hour].employees.push(employee.nom);
             }
+        } else {
+            console.log(`Warning: Attempting to assign uncovered hour ${hour} for ${day}`);
         }
     });
-    console.log(`Shift ID ${shift.id} assigned to ${employee.nom} on ${day}, Optimal: ${isOptimal}`);
 }
+
 
 
 
@@ -569,6 +568,7 @@ function getShiftHours(shift) {
             }
         });
     }
+    //console.log(hours);
     return hours;
 }
 
@@ -576,7 +576,7 @@ function getShiftHours(shift) {
 
 // Helper function to check if any employee has a repos day
 function isReposDay(day, employee) {
-    console.log('Checking for repos day:', employee);
+    //console.log('Checking for repos day:', employee);
     return employee.shifts.some(shift => shift.jour === day && shift.shifts.includes('repos'));
 
 }
@@ -590,13 +590,25 @@ function assignShifts(coverage, extractedSchedule) {
 
     console.log("Starting shift assignment process...");
     for (let day of daysSorted) {
+        console.log("Minimal coverage...");
         assignShiftsForDay(coverage, extractedSchedule, day, false); // First pass for minimum requirements
+        console.log("Optimal coverage...");
         assignShiftsForDay(coverage, extractedSchedule, day, true); // Second pass for optimal coverage
     }
 }
 
 function assignShiftsForDay(coverage, extractedSchedule, day, isOptimal) {
-    let employees = extractedSchedule.employes.filter(employee => !isReposDay(day, employee));
+    let employees = extractedSchedule.employes.filter(employee => {
+        // Filter out employees who have a repos day
+        if (isReposDay(day, employee)) {
+            return false;
+        }
+        // During the optimal pass, also filter out employees who already have shifts assigned on that day
+        if (isOptimal) {
+            return !hasShiftsAssignedThatDay(employee, day, coverage);
+        }
+        return true;
+    });
 
     for (let employee of employees) {
         let bestShiftOverall = null;
@@ -621,10 +633,17 @@ function assignShiftsForDay(coverage, extractedSchedule, day, isOptimal) {
 
         // If a suitable shift is found, assign it
         if (bestShiftOverall) {
-            updateCoverageNeeds(bestShiftOverall, day, coverage, employee);
+            assignShiftToEmployee(bestShiftOverall, day, coverage, employee);
         }
     }
 }
+
+
+
+function hasShiftsAssignedThatDay(employee, day, coverage) {
+    return Object.keys(coverage[day]).some(hour => coverage[day][hour].employees.includes(employee.nom));
+}
+
 
 
 
@@ -642,7 +661,7 @@ function balanceEmployeeHours(coverage, extractedSchedule) {
                     if (!assigned && getShiftHoursByEmployee(employee, day, coverage).length < 7) { // Assuming 7 hours as a typical daily maximum
                         let possibleShift = findShiftToAdd(employee, day, coverage);
                         if (possibleShift) {
-                            updateCoverageNeeds(possibleShift, day, coverage, employee);
+                            assignShiftToEmployee(possibleShift, day, coverage, employee);
                             totalHours++;
                             assigned = true;
                         }
@@ -658,7 +677,7 @@ function balanceEmployeeHours(coverage, extractedSchedule) {
                     if (!reduced && getShiftHoursByEmployee(employee, day, coverage).length > 6) { // Assuming 6 hours as a daily minimum
                         let possibleShift = findShiftToRemove(employee, day, coverage);
                         if (possibleShift) {
-                            updateCoverageNeeds(possibleShift, day, coverage, employee, true); // True to indicate reduction of hours
+                            assignShiftToEmployee(possibleShift, day, coverage, employee, true); // True to indicate reduction of hours
                             totalHours--;
                             reduced = true;
                         }
