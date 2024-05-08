@@ -12,12 +12,13 @@
 
 // Pre-defined JSON objets:
 
+const initialShiftsLeft = 5;
 
 const extractedSchedule = {
     "employes": [
         {
             "nom": "COLIN FANNY",
-            "heuresSemaine": 38.5,
+            "heuresSemaine": 38,
             "shifts": [
                 {"jour": "Lundi", "shifts": []},
                 {"jour": "Mardi", "shifts": []},
@@ -453,6 +454,40 @@ const shiftLibrary = [
         ],
         "desirability": 2
     },
+    {
+        "id": 18,
+        "type": "split",
+        "parts": [
+            {
+                "start": "08:00",
+                "end": "14:00"
+            },
+        ],
+        "desirability": 6
+    },
+    {
+        "id": 19,
+        "type": "split",
+        "parts": [
+            {
+                "start": "13:00",
+                "end": "20:00"
+            },
+        ],
+        "desirability": 5
+    },
+        {
+        "id": 20,
+        "type": "split",
+        "parts": [
+            {
+                "start": "14:00",
+                "end": "20:00"
+            },
+        ],
+        "desirability": 6
+    },
+
     // Add other shifts
 ];
 
@@ -477,14 +512,14 @@ function initializeShiftCoverage() {
             coverage[day][hour].optimal = coverageTargets[priority].optimal;
         }
     }
-    console.log('Coverage initialized:', JSON.stringify(coverage));
+    // console.log('Coverage initialized:', JSON.stringify(coverage));
     return coverage;
 }
 
 
 
 /// Helper function to select the best shift based on dynamicPriority and desirability
-function selectBestShift(day, coverage, isOptimal) {
+function selectBestShift(day, coverage, isOptimal, piggybank) {
     let bestShift = null;
     let highestScore = -1;
     let bestCoverageScore = 0;
@@ -500,7 +535,7 @@ function selectBestShift(day, coverage, isOptimal) {
 
                 // Only tally priority values if the minimum requirement isn't met
                 if (coverage[day][hour].assigned < needed) {
-                    coverageScore += currentPriority * 5; // Double the priority value points
+                    coverageScore += currentPriority * 10; // Double the priority value points
                 }
             }
         });
@@ -508,7 +543,9 @@ function selectBestShift(day, coverage, isOptimal) {
         // Calculate total shift score by adding desirability score to the coverage score
         shiftScore = coverageScore + shift.desirability;
 
-        if (shiftScore > highestScore) {
+        let shiftDuration = getShiftDuration(shift);
+
+        if (shiftScore > highestScore && canAssignShift(piggybank, shiftDuration)) {
             bestShift = shift;
             highestScore = shiftScore;
             bestCoverageScore = coverageScore; // Update best coverage score
@@ -517,7 +554,7 @@ function selectBestShift(day, coverage, isOptimal) {
 
     // Log the best shift details if one has been selected
     if (bestShift) {
-        console.log(`Selected best shift ID: ${bestShift.id} with total score: ${highestScore} (Coverage Score: ${bestCoverageScore}, Desirability: ${bestShift.desirability})`);
+         console.log(`Selected best shift ID: ${bestShift.id} with total score: ${highestScore} (Coverage Score: ${bestCoverageScore}, Desirability: ${bestShift.desirability})`);
     }
 
     return bestShift;
@@ -527,7 +564,7 @@ function selectBestShift(day, coverage, isOptimal) {
 
 
 
-function assignShiftToEmployee(shift, day, coverage, employee) {
+function assignShiftToEmployee(shift, day, coverage, employee, piggybank, extractedSchedule) {
     let shiftHours = getShiftHours(shift);
     console.log(`Assigning shift ${shift.id} for ${employee.nom} on ${day}: covers ${shiftHours.join(', ')}`);
     shiftHours.forEach(hour => {
@@ -544,6 +581,12 @@ function assignShiftToEmployee(shift, day, coverage, employee) {
             console.log(`Warning: Attempting to assign uncovered hour ${hour} for ${day}`);
         }
     });
+    // Update piggybank after shift is assigned
+    let shiftDuration = getShiftDuration(shift);
+    employee.piggybank.shiftsAssigned += 1; // Increment shifts assigned
+    employee.piggybank.hoursLeft -= shiftDuration; //Decrement hours left
+    employee.piggybank = updatePiggybank(employee.piggybank, shiftDuration, employee.heuresSemaine, employee.piggybank.shiftsAssigned);
+    //console.log(`Updating Piggybank for ${employee.nom}:`, employee.piggybank);
 }
 
 
@@ -608,42 +651,43 @@ function isReposDay(day, employee) {
 
 
 function assignShifts(coverage, extractedSchedule) {
-    let daysSorted = Object.keys(priorities).sort((a, b) =>
-        Object.values(priorities[b]).reduce((acc, cur) => acc + cur) -
-        Object.values(priorities[a]).reduce((acc, cur) => acc + cur)
-    );
-
     console.log("Starting shift assignment process...");
-    for (let day of daysSorted) {
-        console.log("Minimal coverage...");
-        assignShiftsForDay(coverage, extractedSchedule, day, false); // First pass for minimum requirements
-        console.log("Optimal coverage...");
-        assignShiftsForDay(coverage, extractedSchedule, day, true); // Second pass for optimal coverage
-    }
-}
-
-function assignShiftsForDay(coverage, extractedSchedule, day, isOptimal) {
-    let employees = extractedSchedule.employes.filter(employee => {
-        // Filter out employees who have a repos day
-        if (isReposDay(day, employee)) {
-            return false;
-        }
-        // During the optimal pass, also filter out employees who already have shifts assigned on that day
-        if (isOptimal) {
-            return !hasShiftsAssignedThatDay(employee, day, coverage);
-        }
-        return true;
+    extractedSchedule.employes.forEach(employee => {
+        // Initialize the piggybank for each employee
+        employee.piggybank = initializePiggybank(employee.heuresSemaine, initialShiftsLeft);
+        console.log(`Piggybank initialized for ${employee.nom}:`, JSON.stringify(employee.piggybank));
     });
 
-    for (let employee of employees) {
-        let bestShift = selectBestShift(day, coverage, isOptimal);
+    // Continue with the rest of the shift assignment logic
+    Object.keys(priorities).sort((a, b) =>
+                                 Object.values(priorities[b]).reduce((acc, cur) => acc + cur) -
+                                 Object.values(priorities[a]).reduce((acc, cur) => acc + cur)
+                                ).forEach(day => {
+        console.log("Processing day:", day);
+        extractedSchedule.employes.forEach(employee => {
+            if (isReposDay(day, employee)) {
+                console.log(`Skipping repos day for ${employee.nom} on ${day}`);
+                return;
+            }
 
-        // If a suitable shift is found, assign it
-        if (bestShift) {
-            assignShiftToEmployee(bestShift, day, coverage, employee);
-        }
-    }
+            assignShiftsForDay(coverage, extractedSchedule, day, false, employee, employee.piggybank);
+            assignShiftsForDay(coverage, extractedSchedule, day, true, employee, employee.piggybank);
+        });
+    });
 }
+
+
+function assignShiftsForDay(coverage, extractedSchedule, day, isOptimal, employee, piggybank) {
+    extractedSchedule.employes.forEach(employee => {
+        if (!isReposDay(day, employee) && !hasShiftsAssignedThatDay(employee, day, coverage)) {
+            let bestShift = selectBestShift(day, coverage, isOptimal, employee.piggybank);
+            if (bestShift) {
+                assignShiftToEmployee(bestShift, day, coverage, employee, employee.piggybank);
+            }
+        }
+    });
+}
+
 
 
 
@@ -756,6 +800,119 @@ function logHourlyCoverage(coverage) {
     }
 }
 
+// Function to calculate and log the total assigned hours for each employee compared to their contracted hours
+function balanceEmployeeHours(coverage, extractedSchedule) {
+    console.log('Balancing employee hours...');
+    extractedSchedule.employes.forEach(employee => {
+        // Calculate total assigned hours from the coverage data
+        let totalAssignedHours = getTotalAssignedHours(employee, coverage);
+        let contractedHours = employee.heuresSemaine;
+
+        // Determine if the employee is over or under their contracted hours
+        let hourDifference = totalAssignedHours - contractedHours;
+
+        // Log the balance state for each employee
+        if (hourDifference > 0) {
+            console.log(`${employee.nom} is over by ${hourDifference.toFixed(1)} hours.`);
+        } else if (hourDifference < 0) {
+            console.log(`${employee.nom} is under by ${Math.abs(hourDifference).toFixed(1)} hours.`);
+        } else {
+            console.log(`${employee.nom} has perfectly balanced hours.`);
+        }
+    });
+}
+
+
+//_______________________________________________
+// NEW STUFF:
+
+function initializePiggybank(hoursPerWeek, shiftsLeft) {
+    let combinations = {
+        '6h': 0,
+        '7h': 0,
+        '8h': 0,
+        'shiftsAssigned':0,
+        'hoursLeft': hoursPerWeek,
+    };
+
+    // Try all combinations to find any that sum up to hoursPerWeek with exactly 5 shifts
+    for (let num8h = 0; num8h <= Math.floor(hoursPerWeek / 8); num8h++) {
+        for (let num7h = 0; num7h <= Math.floor((hoursPerWeek - 8 * num8h) / 7); num7h++) {
+            let remainingHours = hoursPerWeek - 8 * num8h - 7 * num7h;
+            if (remainingHours % 6 === 0) {
+                let num6h = remainingHours / 6;
+                if (num6h + num7h + num8h === shiftsLeft) {
+                    // Record the highest feasible number of each shift type across all valid combinations
+                    combinations['6h'] = Math.max(combinations['6h'], num6h);
+                    combinations['7h'] = Math.max(combinations['7h'], num7h);
+                    combinations['8h'] = Math.max(combinations['8h'], num8h);
+                }
+            }
+        }
+    }
+
+
+    return combinations;
+
+}
+
+
+
+
+function updatePiggybank(piggybank, assignedShiftLength, totalHours, shiftsAssigned) {
+    // Calculate new total hours after assigning a shift
+    let newTotalHours = piggybank.hoursLeft;
+
+    // Decrement shiftsLeft since one shift is assigned
+    let newShiftsLeft = initialShiftsLeft - shiftsAssigned;
+
+    // Recompute the possible combinations based on the new total hours and reduced shift count
+    let newPiggybank = initializePiggybank(newTotalHours, newShiftsLeft);
+
+    // Update the original piggybank object
+    piggybank['6h'] = newPiggybank['6h'];
+    piggybank['7h'] = newPiggybank['7h'];
+    piggybank['8h'] = newPiggybank['8h'];
+
+    //console.log('Piggybank updated after assigning a shift:', JSON.stringify(piggybank));
+    return piggybank;
+}
+
+
+
+function canAssignShift(piggybank, shiftLength) {
+    if (!piggybank) {
+        console.error('Piggybank is undefined.');
+        return false;
+    }
+    if (!piggybank.hasOwnProperty(`${shiftLength}h`)) {
+        console.error(`Piggybank does not have the property: ${shiftLength}h`);
+        return false;
+    }
+    return piggybank[`${shiftLength}h`] > 0;
+}
+
+
+
+
+// Helper function to get the duration of a shift
+function getShiftDuration(shift) {
+    if (shift.type === 'continuous') {
+        let startHour = parseInt(shift.start.split(':')[0], 10);
+        let endHour = parseInt(shift.end.split(':')[0], 10);
+        return endHour - startHour;
+    } else if (shift.type === 'split') {
+        let totalDuration = 0;
+        shift.parts.forEach(part => {
+            let startHour = parseInt(part.start.split(':')[0], 10);
+            let endHour = parseInt(part.end.split(':')[0], 10);
+            totalDuration += endHour - startHour;
+        });
+        return totalDuration;
+    }
+}
+
+
 
 
 (function() {
@@ -763,8 +920,9 @@ function logHourlyCoverage(coverage) {
     // Initialize the shift coverage based on priorities
     let coverage = initializeShiftCoverage();
 
+
     // Assign shifts to ensure minimum coverage
-    assignShifts(coverage, extractedSchedule);
+    assignShifts(coverage, extractedSchedule, 0);
 
     // Balance the weekly hours for each employee
     //balanceEmployeeHours(coverage, extractedSchedule);
@@ -772,5 +930,6 @@ function logHourlyCoverage(coverage) {
     // Print the final schedule
     printSchedule(coverage);
     logHourlyCoverage(coverage);
+    balanceEmployeeHours(coverage, extractedSchedule);
 
 })();
